@@ -168,6 +168,8 @@ def main():
     is_playing_effect = False
     effect_cap = None
     last_jutsu_index = 0
+    last_hand_cx = 480
+    last_hand_cy = 270
 
     window_name = 'NARUTO HandSignDetection Ninjutsu Demo'
     cv.namedWindow(window_name, cv.WINDOW_NORMAL)
@@ -231,8 +233,6 @@ def main():
                 x_offset = (win_w - new_w) // 2
                 y_offset = (win_h - new_h) // 2
                 canvas[y_offset:y_offset+new_h, x_offset:x_offset+new_w] = resized_image
-                
-                # 更新按鈕在當前視窗大小中的物理點擊邊界 (y 軸對應更新為 330~410)
                 button_area = (
                     x_offset + int(new_w * (380 / 960)),
                     y_offset + int(new_h * (330 / 540)),
@@ -268,38 +268,62 @@ def main():
         frame_count += 1
         debug_image = copy.deepcopy(frame)
 
-        # 特效影片讀取與疊加邏輯 ###############################################
+        # 特效影片讀取與疊加邏輯 (在偵測前，使用上一影格的手部坐標，有 1 幀延遲但最平滑) #############
         if is_playing_effect and effect_cap is not None:
             ret_eff, eff_frame = effect_cap.read()
             if ret_eff:
-                # 設定特效影片在 960x540 畫面中央的播放大小 (480x270)
-                eff_h, eff_w = 270, 480
+                # 讓特效大一點：放大到 640x360
+                eff_h, eff_w = 360, 640
                 resized_eff = cv.resize(eff_frame, (eff_w, eff_h))
                 
-                # 計算置中坐標
-                y_start = (540 - eff_h) // 2
-                x_start = (960 - eff_w) // 2
+                # 獲取當前影像的實際寬高 (適應不同相機解析度，防止邊界被切掉)
+                img_h, img_w = debug_image.shape[:2]
                 
-                # 取得原影像的區域
-                roi = debug_image[y_start:y_start+eff_h, x_start:x_start+eff_w]
+                # 計算以手部中心為準的特效範圍
+                x_start = last_hand_cx - eff_w // 2
+                x_end = x_start + eff_w
+                y_start = last_hand_cy - eff_h // 2
+                y_end = y_start + eff_h
                 
-                # 使用加法混色疊加 (黑底自動透明)
-                blended = cv.add(roi, resized_eff)
-                debug_image[y_start:y_start+eff_h, x_start:x_start+eff_w] = blended
+                # 邊界安全裁剪 (動態適應相機解析度，防止坐標越界崩潰)
+                x_start_clamped = max(0, x_start)
+                x_end_clamped = min(img_w, x_end)
+                y_start_clamped = max(0, y_start)
+                y_end_clamped = min(img_h, y_end)
+                
+                eff_x_start = x_start_clamped - x_start
+                eff_x_end = eff_x_start + (x_end_clamped - x_start_clamped)
+                eff_y_start = y_start_clamped - y_start
+                eff_y_end = eff_y_start + (y_end_clamped - y_start_clamped)
+                
+                # 確保裁剪後的寬高大於 0 才疊加
+                if (x_end_clamped > x_start_clamped) and (y_end_clamped > y_start_clamped):
+                    roi = debug_image[y_start_clamped:y_end_clamped, x_start_clamped:x_end_clamped]
+                    eff_patch = resized_eff[eff_y_start:eff_y_end, eff_x_start:eff_x_end]
+                    blended = cv.add(roi, eff_patch)
+                    debug_image[y_start_clamped:y_end_clamped, x_start_clamped:x_end_clamped] = blended
             else:
-                # 影片播完，關閉並釋放
+                # 影片播完，釋放資源
                 effect_cap.release()
                 effect_cap = None
                 is_playing_effect = False
-
-        if (frame_count % (skip_frame + 1)) != 0:
-            continue
 
         # FPS計測 ##############################################################
         fps_result = cvFpsCalc.get()
 
         # 検出実施 #############################################################
         bboxes, scores, class_ids = yolox.inference(frame)
+
+        # 更新當前手勢中心點坐標 (供下一影格的特效跟隨使用)
+        best_bbox = None
+        best_score = 0
+        for bbox, score, class_id in zip(bboxes, scores, class_ids):
+            if score >= score_th and score > best_score:
+                best_score = score
+                best_bbox = bbox
+        if best_bbox is not None:
+            last_hand_cx = int((best_bbox[0] + best_bbox[2]) / 2)
+            last_hand_cy = int((best_bbox[1] + best_bbox[3]) / 2)
 
         # 検出内容の履歴追加 ####################################################
         for _, score, class_id in zip(bboxes, scores, class_ids):
@@ -327,7 +351,7 @@ def main():
             sign_history_queue.clear()
 
         # 術成立判定 #########################################################
-        jutsu_index, jutsu_start_time = check_jutsu(
+        jutsu_index, jutsu_start_time, matched = check_jutsu(
             sign_history_queue,
             labels,
             jutsu,
@@ -336,11 +360,14 @@ def main():
         )
 
         # 檢查是否觸發水亂波之術 (Water Trumpet) 特效
-        if jutsu_index != last_jutsu_index:
-            if jutsu[jutsu_index][2] == "水乱破の術" and not is_playing_effect:
+        if matched:
+            if jutsu[jutsu_index][2] == "水乱破の術":
+                if effect_cap is not None:
+                    effect_cap.release()
                 effect_cap = cv.VideoCapture('VisualEffects/LQ.mov')
                 is_playing_effect = True
-            last_jutsu_index = jutsu_index
+            # 觸發術後，清空印的顯示佇列
+            sign_display_queue.clear()
 
         # キー処理 ###########################################################
         key = cv.waitKey(1)
@@ -432,6 +459,7 @@ def check_jutsu(
 ):
     # 印の履歴から術名をマッチング
     sign_history = ''
+    matched = False
     if len(sign_history_queue) > 0:
         for sign_id in sign_history_queue:
             sign_history = sign_history + labels[sign_id][1]
@@ -439,9 +467,13 @@ def check_jutsu(
             if sign_history == ''.join(signs[4:]):
                 jutsu_index = index
                 jutsu_start_time = time.time()  # 術の最終検出時間
+                matched = True
                 break
 
-    return jutsu_index, jutsu_start_time
+    if matched:
+        sign_history_queue.clear()
+
+    return jutsu_index, jutsu_start_time, matched
 
 
 def draw_debug_image(
