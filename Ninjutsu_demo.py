@@ -13,6 +13,7 @@ import numpy as np
 from utils import CvFpsCalc
 from utils import CvDrawText
 from model.yolox.yolox_onnx import YoloxONNX
+from PIL import Image, ImageSequence
 
 state = 'COVER'
 button_area = (0, 0, 0, 0)
@@ -78,6 +79,137 @@ def get_args():
     args = parser.parse_args()
 
     return args
+
+
+class GIFReader:
+    """用 Pillow 載入 GIF，並為 OpenCV 提供帶有 Alpha 通道去背的影格"""
+    def __init__(self, filepath):
+        self.frames = []
+        try:
+            im = Image.open(filepath)
+            for frame in ImageSequence.Iterator(im):
+                frame_rgba = frame.convert('RGBA')
+                arr = np.array(frame_rgba)
+                # 分離出 BGR 與 Alpha 通道
+                bgr = cv.cvtColor(arr[:, :, :3], cv.COLOR_RGB2BGR)
+                alpha = arr[:, :, 3]
+                self.frames.append((bgr, alpha))
+        except Exception as e:
+            print(f"[!] 載入 GIF 失敗: {filepath}, 錯誤: {e}")
+        self.idx = 0
+
+    def read(self):
+        if not self.frames:
+            return False, None, None
+        bgr, alpha = self.frames[self.idx]
+        self.idx = (self.idx + 1) % len(self.frames)
+        return True, bgr, alpha
+
+
+class SmokeParticle:
+    """濃郁煙霧粒子，模擬影分身召喚時的煙霧特效"""
+    def __init__(self, x, y):
+        self.x = x
+        self.y = y
+        # 隨機噴射角度與速度
+        angle = np.random.uniform(0, 2 * np.pi)
+        speed = np.random.uniform(3.5, 8)
+        self.vx = np.cos(angle) * speed
+        self.vy = np.sin(angle) * speed - np.random.uniform(0.2, 0.8)  # 向上飄動
+        self.radius = np.random.uniform(15, 65)   # 稍微增加起始半徑，以呈現厚重濃霧
+        self.alpha = np.random.uniform(0.38, 0.68) # 顯著提高不透明度，讓煙霧更濃郁
+        self.fade = np.random.uniform(0.008, 0.016) # 縮短消散時間 0.3 秒
+        self.growth = np.random.uniform(0.5, 1.1)   # 稍微增加膨脹速度
+        # 煙霧主色調以豐富的淺灰白色為主
+        c = np.random.randint(215, 245)
+        self.color = (c, c, c)
+
+    def update(self):
+        self.x += self.vx
+        self.y += self.vy
+        self.radius += self.growth
+        self.alpha -= self.fade
+        self.vx *= 0.94  # 空氣阻力
+        self.vy *= 0.94
+        return self.alpha > 0
+
+
+def draw_smoke_particles(image, smoke_particles):
+    """在影像上繪製半透明的煙霧粒子"""
+    h, w, c = image.shape
+    for p in smoke_particles:
+        x, y, r = int(p.x), int(p.y), int(p.radius)
+        if r <= 0 or p.alpha <= 0:
+            continue
+        
+        # 計算邊界裁剪，防止陣列溢出
+        x1 = max(0, x - r)
+        y1 = max(0, y - r)
+        x2 = min(w, x + r)
+        y2 = min(h, y + r)
+        if x2 <= x1 or y2 <= y1:
+            continue
+        
+        # 建立圓形局部遮罩
+        sub_w = x2 - x1
+        sub_h = y2 - y1
+        mask = np.zeros((sub_h, sub_w), dtype=np.uint8)
+        cv.circle(mask, (x - x1, y - y1), r, 255, -1)
+        
+        # 進行 alpha 融合
+        roi = image[y1:y2, x1:x2]
+        color_bg = roi.copy()
+        color_fg = np.full(roi.shape, p.color, dtype=np.uint8)
+        
+        blended = cv.addWeighted(color_fg, p.alpha, color_bg, 1.0 - p.alpha, 0)
+        mask_bool = mask == 255
+        image[y1:y2, x1:x2][mask_bool] = blended[mask_bool]
+
+
+def blend_clone(live_frame, clone_roi, start_x, start_y, feather_pixels=45, alpha=1.0):
+    """將分身區塊（包含背景與上下邊緣羽化）完美融合到實時畫面"""
+    h, w, c = live_frame.shape
+    clone_h, clone_w, clone_c = clone_roi.shape
+    
+    end_x = start_x + clone_w
+    end_y = start_y + clone_h
+    
+    x1 = max(0, start_x)
+    x2 = min(w, end_x)
+    y1 = max(0, start_y)
+    y2 = min(h, end_y)
+    
+    if x2 <= x1 or y2 <= y1:
+        return
+        
+    roi_live = live_frame[y1:y2, x1:x2]
+    roi_clone = clone_roi[(y1 - start_y):(y2 - start_y), (x1 - start_x):(x2 - start_x)]
+    
+    mask_h = y2 - y1
+    mask_w = x2 - x1
+    mask = np.ones((mask_h, mask_w), dtype=np.float32)
+    
+    # 左右邊界羽化 (面向中央人像的邊緣進行羽化)
+    if start_x < w // 2:
+        # 左分身：羽化右側邊界
+        for i in range(min(feather_pixels, mask_w)):
+            idx = mask_w - 1 - i
+            mask[:, idx] = float(i) / feather_pixels
+    else:
+        # 右分身：羽化左側邊界
+        for i in range(min(feather_pixels, mask_w)):
+            mask[:, i] = float(i) / feather_pixels
+            
+    # 上下邊界羽化 (避免縮放後上下邊緣有生硬切口)
+    vertical_feather = 15
+    for i in range(min(vertical_feather, mask_h)):
+        mask[i, :] *= float(i) / vertical_feather
+        idx_b = mask_h - 1 - i
+        mask[idx_b, :] *= float(i) / vertical_feather
+            
+    mask_3d = np.expand_dims(mask * alpha, axis=2)
+    blended = roi_clone * mask_3d + roi_live * (1.0 - mask_3d)
+    live_frame[y1:y2, x1:x2] = blended.astype(np.uint8)
 
 
 def main():
@@ -167,9 +299,20 @@ def main():
     # 特效播放變數
     is_playing_effect = False
     effect_cap = None
+    effect_start_time = 0.0
     last_jutsu_index = 0
     last_hand_cx = 480
     last_hand_cy = 270
+
+    # 影分身特效變數
+    clones_active = False
+    clone_start_time = 0.0
+    smoke_particles = []
+
+    # 千鳥特效變數
+    is_playing_chidori = False
+    chidori_start_time = 0.0
+    chidori_reader = None
 
     window_name = 'NARUTO HandSignDetection Ninjutsu Demo'
     cv.namedWindow(window_name, cv.WINDOW_NORMAL)
@@ -277,12 +420,19 @@ def main():
         bboxes, scores, class_ids = yolox.inference(frame)
 
         # 更新當前手勢中心點坐標 (供下一影格的特效跟隨使用)
+        current_hands = []
         best_bbox = None
         best_score = 0
+        # 播放千鳥或水遁時，降低手部追隨的置信度門檻至 0.15，以確保單手揮動置信度極低時依然能靈敏跟隨
+        current_follow_th = 0.15 if (is_playing_chidori or is_playing_effect) else score_th
         for bbox, score, class_id in zip(bboxes, scores, class_ids):
-            if score >= score_th and score > best_score:
-                best_score = score
-                best_bbox = bbox
+            if score >= current_follow_th:
+                cx = int((bbox[0] + bbox[2]) / 2)
+                cy = int((bbox[1] + bbox[3]) / 2)
+                current_hands.append((cx, cy))
+                if score > best_score:
+                    best_score = score
+                    best_bbox = bbox
         if best_bbox is not None:
             last_hand_cx = int((best_bbox[0] + best_bbox[2]) / 2)
             last_hand_cy = int((best_bbox[1] + best_bbox[3]) / 2)
@@ -321,13 +471,39 @@ def main():
             jutsu_start_time,
         )
 
-        # 檢查是否觸發水亂波之術 (Water Trumpet) 特效
+        # 檢查是否觸發特定忍術特效 (包含分身之術與水亂波之術)
         if matched:
-            if jutsu[jutsu_index][2] == "水乱破の術":
+            if jutsu[jutsu_index][2] == "分身の術":
+                clones_active = True
+                clone_start_time = time.time()
+                
+                h, w = frame.shape[:2]
+                clone_scale = 0.82
+                clone_h = int(h * clone_scale)
+                clone_w = int((w // 3) * clone_scale)
+                start_y = int((h - clone_h) * 0.4)
+                
+                smoke_particles.clear()
+                # 產生細緻煙霧粒子 (單邊減少20%粒子，改為 56 個粒子以防發盪)
+                for _ in range(56):
+                    py = np.random.uniform(start_y, start_y + clone_h)
+                    px = np.random.uniform((w // 3 - clone_w) // 2, (w // 3 - clone_w) // 2 + clone_w)
+                    smoke_particles.append(SmokeParticle(px, py))
+                for _ in range(56):
+                    py = np.random.uniform(start_y, start_y + clone_h)
+                    px = np.random.uniform(2 * w // 3 + (w // 3 - clone_w) // 2, 2 * w // 3 + (w // 3 - clone_w) // 2 + clone_w)
+                    smoke_particles.append(SmokeParticle(px, py))
+                    
+            elif jutsu[jutsu_index][2] == "水乱破の術":
                 if effect_cap is not None:
                     effect_cap.release()
                 effect_cap = cv.VideoCapture('VisualEffects/LQ.mov')
                 is_playing_effect = True
+                effect_start_time = time.time()
+            elif jutsu[jutsu_index][2] == "千鳥":
+                chidori_reader = GIFReader('VisualEffects/lightning-aura.gif')
+                is_playing_chidori = True
+                chidori_start_time = time.time()
             # 觸發術後，清空印的顯示佇列
             sign_display_queue.clear()
 
@@ -336,10 +512,191 @@ def main():
         if key == 99:  # C：印の履歴を消去
             sign_display_queue.clear()
             sign_history_queue.clear()
+            
+        # 手動測試按鍵 (方便測試特效，後續可拿掉)
+        if key == 32 or key == 115:  # 空白鍵(32) 或 S鍵(115)：手動觸發影分身之術
+            clones_active = True
+            clone_start_time = time.time()
+            h, w = frame.shape[:2]
+            clone_scale = 0.82
+            clone_h = int(h * clone_scale)
+            clone_w = int((w // 3) * clone_scale)
+            start_y = int((h - clone_h) * 0.4)
+            smoke_particles.clear()
+            for _ in range(56):
+                py = np.random.uniform(start_y, start_y + clone_h)
+                px = np.random.uniform((w // 3 - clone_w) // 2, (w // 3 - clone_w) // 2 + clone_w)
+                smoke_particles.append(SmokeParticle(px, py))
+            for _ in range(56):
+                py = np.random.uniform(start_y, start_y + clone_h)
+                px = np.random.uniform(2 * w // 3 + (w // 3 - clone_w) // 2, 2 * w // 3 + (w // 3 - clone_w) // 2 + clone_w)
+                smoke_particles.append(SmokeParticle(px, py))
+            # 顯示招式名稱
+            for idx, item in enumerate(jutsu):
+                if len(item) > 2 and item[2] == "分身の術":
+                    jutsu_index = idx
+                    jutsu_start_time = time.time()
+                    break
+
+        elif key == 113:  # Q鍵(113)：手動觸發千鳥特效
+            chidori_reader = GIFReader('VisualEffects/lightning-aura.gif')
+            is_playing_chidori = True
+            chidori_start_time = time.time()
+            # 顯示招式名稱
+            for idx, item in enumerate(jutsu):
+                if len(item) > 2 and item[2] == "千鳥":
+                    jutsu_index = idx
+                    jutsu_start_time = time.time()
+                    break
+
+        elif key == 119:  # W鍵(119)：手動觸發水遁水乱破之術特效
+            if effect_cap is not None:
+                effect_cap.release()
+            effect_cap = cv.VideoCapture('VisualEffects/LQ.mov')
+            is_playing_effect = True
+            effect_start_time = time.time()
+            # 顯示招式名稱
+            for idx, item in enumerate(jutsu):
+                if len(item) > 2 and item[2] == "水乱破の術":
+                    jutsu_index = idx
+                    jutsu_start_time = time.time()
+                    break
+
         if key == 27:  # ESC：プログラム終了
             break
 
         # 画面反映 #############################################################
+        
+        # 渲染影分身特效與實時畫面結合 (影分身持續 6 秒)
+        if clones_active:
+            elapsed_time = time.time() - clone_start_time
+            if elapsed_time < 6.0:
+                h, w = frame.shape[:2]
+                crop_x1 = w // 3
+                crop_x2 = 2 * w // 3
+                raw_left = frame[0:h, crop_x1:crop_x2]
+                raw_right = frame[0:h, crop_x1:crop_x2]
+                
+                clone_scale = 0.82
+                clone_h = int(h * clone_scale)
+                clone_w = int((w // 3) * clone_scale)
+                
+                left_roi = cv.resize(raw_left, (clone_w, clone_h), interpolation=cv.INTER_LINEAR)
+                right_roi = cv.resize(raw_right, (clone_w, clone_h), interpolation=cv.INTER_LINEAR)
+                
+                start_y = int((h - clone_h) * 0.4)
+                left_x = (w // 3 - clone_w) // 2
+                right_x = 2 * w // 3 + (w // 3 - clone_w) // 2
+                
+                alpha = min(1.0, elapsed_time / 0.5)
+                
+                blend_clone(debug_image, left_roi, left_x, start_y, feather_pixels=45, alpha=alpha)
+                blend_clone(debug_image, right_roi, right_x, start_y, feather_pixels=45, alpha=alpha)
+            else:
+                clones_active = False
+                
+        # 更新並繪製煙霧粒子
+        if smoke_particles:
+            smoke_particles = [p for p in smoke_particles if p.update()]
+            draw_smoke_particles(debug_image, smoke_particles)
+
+        # 渲染水遁特效 (LQ.mov) - 跟隨所有手部位置並縮小且維持原始 16:9 長寬比
+        if is_playing_effect and effect_cap is not None:
+            ret_e, effect_frame = effect_cap.read()
+            if not ret_e:
+                effect_cap.release()
+                effect_cap = None
+                is_playing_effect = False
+            else:
+                h, w = debug_image.shape[:2]
+                
+                # 計算播放經過的時間，並在 2 秒內動態放大至 250%
+                dt_e = time.time() - effect_start_time
+                scale_ratio = min(1.0, dt_e / 2.0)
+                scale = 1.0 + 1.5 * scale_ratio
+                
+                # 根據影片原始寬高比動態計算尺寸，防止畫面被壓扁成橢圓
+                eff_h, eff_w = effect_frame.shape[:2]
+                aspect_ratio = eff_w / eff_h
+                eh = int(250 * scale)
+                ew = int(eh * aspect_ratio)
+                
+                effect_resized = cv.resize(effect_frame, (ew, eh))
+                
+                # 決定要貼上特效的所有中心點
+                # 如果當前有偵測到合格的手部，則在所有手部中心貼上特效；若無，則使用最後記錄的位置
+                targets = current_hands if len(current_hands) > 0 else [(last_hand_cx, last_hand_cy)]
+                
+                for cx, cy in targets:
+                    x1 = max(0, cx - ew // 2)
+                    y1 = max(0, cy - eh // 2)
+                    x2 = min(w, cx + ew // 2)
+                    y2 = min(h, cy + eh // 2)
+                    
+                    # 裁剪以防溢出邊界
+                    crop_x1 = ew // 2 - (cx - x1)
+                    crop_y1 = eh // 2 - (cy - y1)
+                    crop_x2 = ew // 2 + (x2 - cx)
+                    crop_y2 = eh // 2 + (y2 - cy)
+                    
+                    if (x2 > x1) and (y2 > y1):
+                        roi = debug_image[y1:y2, x1:x2]
+                        eff_cropped = effect_resized[crop_y1:crop_y2, crop_x1:crop_x2]
+                        # 水遁去背使用 cv.add (因 LQ.mov 背景為純黑)
+                        debug_image[y1:y2, x1:x2] = cv.add(roi, eff_cropped)
+
+        # 渲染千鳥雷電特效 (lightning-aura.gif) - 跟隨所有手部位置並隨時間動態放大至 250% (使用 Alpha 通道精確去背)
+        if is_playing_chidori and chidori_reader is not None:
+            dt = time.time() - chidori_start_time
+            if dt < 5.0:
+                ret_c, chidori_frame, chidori_alpha = chidori_reader.read()
+                
+                if ret_c:
+                    h, w = debug_image.shape[:2]
+                    
+                    # 在 2 秒內快速動態放大 (從 1.0 放大到 2.5 倍)，之後維持最大尺寸
+                    scale_ratio = min(1.0, dt / 2.0)
+                    scale = 1.0 + 1.5 * scale_ratio
+                    
+                    # 基礎大小 300x300，最大放大到 750x750 (250%)
+                    ew = int(300 * scale)
+                    eh = int(300 * scale)
+                    
+                    chidori_resized = cv.resize(chidori_frame, (ew, eh))
+                    alpha_resized = cv.resize(chidori_alpha, (ew, eh))
+                    
+                    # 決定要貼上特效的所有中心點
+                    # 如果當前有偵測到合格的手部，則在所有手部中心貼上特效；若無，則使用最後記錄的位置
+                    targets = current_hands if len(current_hands) > 0 else [(last_hand_cx, last_hand_cy)]
+                    
+                    for cx, cy in targets:
+                        x1 = max(0, cx - ew // 2)
+                        y1 = max(0, cy - eh // 2)
+                        x2 = min(w, cx + ew // 2)
+                        y2 = min(h, cy + eh // 2)
+                        
+                        # 裁剪以防溢出邊界
+                        crop_x1 = ew // 2 - (cx - x1)
+                        crop_y1 = eh // 2 - (cy - y1)
+                        crop_x2 = ew // 2 + (x2 - cx)
+                        crop_y2 = eh // 2 + (y2 - cy)
+                        
+                        if (x2 > x1) and (y2 > y1):
+                            roi = debug_image[y1:y2, x1:x2]
+                            eff_cropped = chidori_resized[crop_y1:crop_y2, crop_x1:crop_x2]
+                            mask_cropped = alpha_resized[crop_y1:crop_y2, crop_x1:crop_x2]
+                            
+                            # 使用 alpha mask 進行融合去背，只疊加非透明(雷電)的部分
+                            mask_f = mask_cropped.astype(np.float32) / 255.0
+                            mask_f = np.expand_dims(mask_f, axis=2)
+                            
+                            # 融合公式：前景 * alpha + 背景 * (1 - alpha)
+                            blended = eff_cropped.astype(np.float32) * mask_f + roi.astype(np.float32) * (1.0 - mask_f)
+                            debug_image[y1:y2, x1:x2] = blended.astype(np.uint8)
+            else:
+                is_playing_chidori = False
+                chidori_reader = None
+
         debug_image = draw_debug_image(
             debug_image,
             font_path,
