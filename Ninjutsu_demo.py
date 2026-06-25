@@ -300,6 +300,22 @@ def main():
     is_playing_effect = False
     effect_cap = None
     effect_start_time = 0.0
+    
+    # 龍火之術變數
+    is_playing_dragon = False
+    dragon_cap = None
+    dragon_start_time = 0.0
+    
+    # 土遁追牙之術變數
+    is_playing_dog = False
+    dog_image = None
+    dog_start_time = 0.0
+    
+    # 通靈之術變數
+    is_playing_summon = False
+    summon_image = None
+    summon_start_time = 0.0
+    
     last_jutsu_index = 0
     last_hand_cx = 480
     last_hand_cy = 270
@@ -423,8 +439,8 @@ def main():
         current_hands = []
         best_bbox = None
         best_score = 0
-        # 播放千鳥或水遁時，降低手部追隨的置信度門檻至 0.15，以確保單手揮動置信度極低時依然能靈敏跟隨
-        current_follow_th = 0.15 if (is_playing_chidori or is_playing_effect) else score_th
+        # 播放千鳥、水遁、龍火、土遁追牙或通靈之術時，降低手部追隨的置信度門檻至 0.15，以確保單手揮動置信度極低時依然能靈敏跟隨
+        current_follow_th = 0.15 if (is_playing_chidori or is_playing_effect or is_playing_dragon or is_playing_dog or is_playing_summon) else score_th
         for bbox, score, class_id in zip(bboxes, scores, class_ids):
             if score >= current_follow_th:
                 cx = int((bbox[0] + bbox[2]) / 2)
@@ -504,6 +520,34 @@ def main():
                 chidori_reader = GIFReader('VisualEffects/lightning-aura.gif')
                 is_playing_chidori = True
                 chidori_start_time = time.time()
+            elif jutsu[jutsu_index][2] == "龍火の術":
+                if dragon_cap is not None:
+                    dragon_cap.release()
+                dragon_cap = cv.VideoCapture('VisualEffects/boom.mp4')
+                is_playing_dragon = True
+                dragon_start_time = time.time()
+            elif jutsu[jutsu_index][2] == "口寄せ 土遁追牙の術":
+                dog_image = cv.imread('VisualEffects/dogdogdog.png')
+                is_playing_dog = True
+                dog_start_time = time.time()
+                h, w = frame.shape[:2]
+                smoke_particles.clear()
+                # 增加粒子數量以呈現大面積煙霧，並以畫面中央為中心
+                for _ in range(120):
+                    py = np.random.uniform(h // 2 - 120, h // 2 + 120)
+                    px = np.random.uniform(w // 2 - 180, w // 2 + 180)
+                    smoke_particles.append(SmokeParticle(px, py))
+            elif jutsu[jutsu_index][2] == "口寄せの術":
+                summon_image = cv.imread('VisualEffects/MPKa7iiQyaoGxbGagC6Fea (1).png', cv.IMREAD_UNCHANGED)
+                is_playing_summon = True
+                summon_start_time = time.time()
+                h, w = frame.shape[:2]
+                smoke_particles.clear()
+                # 增加粒子數量以呈現大面積煙霧，並以畫面中央為中心
+                for _ in range(120):
+                    py = np.random.uniform(h // 2 - 120, h // 2 + 120)
+                    px = np.random.uniform(w // 2 - 180, w // 2 + 180)
+                    smoke_particles.append(SmokeParticle(px, py))
             # 觸發術後，清空印的顯示佇列
             sign_display_queue.clear()
 
@@ -558,6 +602,54 @@ def main():
             # 顯示招式名稱
             for idx, item in enumerate(jutsu):
                 if len(item) > 2 and item[2] == "水乱破の術":
+                    jutsu_index = idx
+                    jutsu_start_time = time.time()
+                    break
+
+        elif key == 101:  # E鍵(101)：手動觸發火遁龍火之術特效
+            if dragon_cap is not None:
+                dragon_cap.release()
+            dragon_cap = cv.VideoCapture('VisualEffects/boom.mp4')
+            is_playing_dragon = True
+            dragon_start_time = time.time()
+            # 顯示招式名稱
+            for idx, item in enumerate(jutsu):
+                if len(item) > 2 and item[2] == "龍火の術":
+                    jutsu_index = idx
+                    jutsu_start_time = time.time()
+                    break
+
+        elif key == 114:  # R鍵(114)：手動觸發口寄せ 土遁追牙の術特效
+            dog_image = cv.imread('VisualEffects/dogdogdog.png')
+            is_playing_dog = True
+            dog_start_time = time.time()
+            h, w = frame.shape[:2]
+            smoke_particles.clear()
+            # 增加粒子數量以呈現大面積煙霧，並以畫面中央為中心
+            for _ in range(120):
+                py = np.random.uniform(h // 2 - 120, h // 2 + 120)
+                px = np.random.uniform(w // 2 - 180, w // 2 + 180)
+                smoke_particles.append(SmokeParticle(px, py))
+            # 顯示招式名稱
+            for idx, item in enumerate(jutsu):
+                if len(item) > 2 and item[2] == "口寄せ 土遁追牙の術":
+                    jutsu_index = idx
+                    jutsu_start_time = time.time()
+                    break
+        elif key == 116:  # T鍵(116)：手動觸發口寄せの術特效
+            summon_image = cv.imread('VisualEffects/MPKa7iiQyaoGxbGagC6Fea (1).png', cv.IMREAD_UNCHANGED)
+            is_playing_summon = True
+            summon_start_time = time.time()
+            h, w = frame.shape[:2]
+            smoke_particles.clear()
+            # 增加粒子數量以呈現大面積煙霧，並以畫面中央為中心
+            for _ in range(120):
+                py = np.random.uniform(h // 2 - 120, h // 2 + 120)
+                px = np.random.uniform(w // 2 - 180, w // 2 + 180)
+                smoke_particles.append(SmokeParticle(px, py))
+            # 顯示招式名稱
+            for idx, item in enumerate(jutsu):
+                if len(item) > 2 and item[2] == "口寄せの術":
                     jutsu_index = idx
                     jutsu_start_time = time.time()
                     break
@@ -644,6 +736,213 @@ def main():
                         eff_cropped = effect_resized[crop_y1:crop_y2, crop_x1:crop_x2]
                         # 水遁去背使用 cv.add (因 LQ.mov 背景為純黑)
                         debug_image[y1:y2, x1:x2] = cv.add(roi, eff_cropped)
+
+        # 渲染火遁龍火之術 (boom.mp4) - 跟隨所有手部位置並在 2 秒內縮放至 400% (綠幕 Chroma Keying 去背)
+        if is_playing_dragon and dragon_cap is not None:
+            ret_d, dragon_frame = dragon_cap.read()
+            if not ret_d:
+                dragon_cap.release()
+                dragon_cap = None
+                is_playing_dragon = False
+            else:
+                h, w = debug_image.shape[:2]
+                
+                # 計算播放經過的時間，並在 2 秒內動態放大至 400%
+                dt_d = time.time() - dragon_start_time
+                scale_ratio = min(1.0, dt_d / 2.0)
+                scale = 1.0 + 3.0 * scale_ratio
+                
+                # 根據影片原始寬高比動態計算尺寸
+                eff_h, eff_w = dragon_frame.shape[:2]
+                aspect_ratio = eff_w / eff_h
+                eh = int(250 * scale)
+                ew = int(eh * aspect_ratio)
+                
+                dragon_resized = cv.resize(dragon_frame, (ew, eh))
+                
+                # 對調整大小後的影格進行綠幕去背 (Chroma Keying)
+                # 轉換至 HSV 空間
+                hsv = cv.cvtColor(dragon_resized, cv.COLOR_BGR2HSV)
+                # 綠幕 HSV 範圍設定
+                lower_green = np.array([35, 40, 40])
+                upper_green = np.array([85, 255, 255])
+                green_mask = cv.inRange(hsv, lower_green, upper_green)
+                # 火焰主體遮罩 (反轉綠色遮罩)
+                fg_mask = cv.bitwise_not(green_mask)
+                
+                # 決定要貼上特效的所有中心點
+                targets = current_hands if len(current_hands) > 0 else [(last_hand_cx, last_hand_cy)]
+                
+                for cx, cy in targets:
+                    x1 = max(0, cx - ew // 2)
+                    y1 = max(0, cy - eh // 2)
+                    x2 = min(w, cx + ew // 2)
+                    y2 = min(h, cy + eh // 2)
+                    
+                    # 裁剪以防溢出邊界
+                    crop_x1 = ew // 2 - (cx - x1)
+                    crop_y1 = eh // 2 - (cy - y1)
+                    crop_x2 = ew // 2 + (x2 - cx)
+                    crop_y2 = eh // 2 + (y2 - cy)
+                    
+                    if (x2 > x1) and (y2 > y1):
+                        roi = debug_image[y1:y2, x1:x2]
+                        eff_cropped = dragon_resized[crop_y1:crop_y2, crop_x1:crop_x2]
+                        mask_cropped = fg_mask[crop_y1:crop_y2, crop_x1:crop_x2]
+                        
+                        # 使用綠幕去背遮罩進行 alpha 混合
+                        mask_f = mask_cropped.astype(np.float32) / 255.0
+                        mask_f = np.expand_dims(mask_f, axis=2)
+                        
+                        # 融合公式
+                        blended = eff_cropped.astype(np.float32) * mask_f + roi.astype(np.float32) * (1.0 - mask_f)
+                        debug_image[y1:y2, x1:x2] = blended.astype(np.uint8)
+
+        # 渲染口寄せ 土遁追牙之術 (dogdogdog.png) - 固定於畫面中央並在 2 秒內縮放至佔滿整個視窗 (黑白棋盤格去背與淡入混合，前 1 秒僅顯示煙霧)
+        if is_playing_dog and dog_image is not None:
+            dt_dog = time.time() - dog_start_time
+            if dt_dog < 6.0:
+                h, w = debug_image.shape[:2]
+                
+                # 前 1 秒僅顯示煙霧，1 秒後才開始淡入並放大忍犬
+                if dt_dog >= 1.0:
+                    t_rel = dt_dog - 1.0
+                    # 2 秒內從初始尺寸動態膨脹至佔滿整個視窗
+                    scale_ratio = min(1.0, t_rel / 2.0)
+                    
+                    eff_h, eff_w = dog_image.shape[:2]
+                    aspect_ratio = eff_w / eff_h
+                    
+                    # 計算 Cover 縮放：保持 1.833 原始長寬比且長寬皆大於等於視窗大小
+                    scale_h = h / eff_h
+                    scale_w = w / eff_w
+                    cover_scale = max(scale_h, scale_w)
+                    
+                    eh_end = int(eff_h * cover_scale)
+                    ew_end = int(eff_w * cover_scale)
+                    
+                    # 初始大小
+                    eh_start = 220
+                    ew_start = int(eh_start * aspect_ratio)
+                    
+                    # 插值計算當前寬高
+                    eh = int(eh_start + (eh_end - eh_start) * scale_ratio)
+                    ew = int(ew_start + (ew_end - ew_start) * scale_ratio)
+                    
+                    dog_resized = cv.resize(dog_image, (ew, eh), interpolation=cv.INTER_LINEAR)
+                    
+                    # 棋盤格去背 (Chroma Keying)：轉換至 HSV，檢測並過濾灰白與純白網格背景
+                    hsv_dog = cv.cvtColor(dog_resized, cv.COLOR_BGR2HSV)
+                    s_dog = hsv_dog[:, :, 1]
+                    v_dog = hsv_dog[:, :, 2]
+                    # 飽和度低於 30 且 亮度高於 150 被判定為黑白/灰白相間格子
+                    bg_mask = (s_dog < 30) & (v_dog > 150)
+                    fg_mask = (~bg_mask).astype(np.uint8) * 255
+                    
+                    # 忍犬淡入比例 (1.0秒淡入)
+                    alpha_blend = min(1.0, t_rel / 1.0)
+                    
+                    # 決定要貼上特效的所有中心點 (固定在畫面中央)
+                    targets = [(w // 2, h // 2)]
+                    
+                    for cx, cy in targets:
+                        x1 = max(0, cx - ew // 2)
+                        y1 = max(0, cy - eh // 2)
+                        x2 = min(w, cx + ew // 2)
+                        y2 = min(h, cy + eh // 2)
+                        
+                        # 裁剪以防溢出邊界
+                        crop_x1 = ew // 2 - (cx - x1)
+                        crop_y1 = eh // 2 - (cy - y1)
+                        crop_x2 = ew // 2 + (x2 - cx)
+                        crop_y2 = eh // 2 + (y2 - cy)
+                        
+                        if (x2 > x1) and (y2 > y1):
+                            roi = debug_image[y1:y2, x1:x2]
+                            eff_cropped = dog_resized[crop_y1:crop_y2, crop_x1:crop_x2]
+                            mask_cropped = fg_mask[crop_y1:crop_y2, crop_x1:crop_x2]
+                            
+                            # 結合淡入比例與去背 Mask
+                            mask_f = mask_cropped.astype(np.float32) / 255.0
+                            mask_f = np.expand_dims(mask_f * alpha_blend, axis=2)
+                            
+                            # 融合公式
+                            blended = eff_cropped.astype(np.float32) * mask_f + roi.astype(np.float32) * (1.0 - mask_f)
+                            debug_image[y1:y2, x1:x2] = blended.astype(np.uint8)
+            else:
+                is_playing_dog = False
+                dog_image = None
+
+        # 渲染口寄せの術 (MPKa7iiQyaoGxbGagC6Fea (1).png) - 固定於畫面中央並在 2 秒內縮放至佔滿整個視窗 (利用自帶 Alpha 通道精確去背，前 1 秒僅顯示煙霧)
+        if is_playing_summon and summon_image is not None:
+            dt_sum = time.time() - summon_start_time
+            if dt_sum < 6.0:
+                h, w = debug_image.shape[:2]
+                
+                # 前 1 秒僅顯示煙霧，1 秒後才開始淡入並放大召喚獸
+                if dt_sum >= 1.0:
+                    t_rel = dt_sum - 1.0
+                    # 2 秒內從初始尺寸動態膨脹至佔滿整個視窗
+                    scale_ratio = min(1.0, t_rel / 2.0)
+                    
+                    eff_h, eff_w = summon_image.shape[:2]
+                    aspect_ratio = eff_w / eff_h
+                    
+                    # 計算 Cover 縮放：保持原始長寬比且長寬皆大於等於視窗大小
+                    scale_h = h / eff_h
+                    scale_w = w / eff_w
+                    cover_scale = max(scale_h, scale_w)
+                    
+                    eh_end = int(eff_h * cover_scale)
+                    ew_end = int(eff_w * cover_scale)
+                    
+                    # 初始大小
+                    eh_start = 220
+                    ew_start = int(eh_start * aspect_ratio)
+                    
+                    # 插值計算當前寬高
+                    eh = int(eh_start + (eh_end - eh_start) * scale_ratio)
+                    ew = int(ew_start + (ew_end - ew_start) * scale_ratio)
+                    
+                    summon_resized = cv.resize(summon_image, (ew, eh), interpolation=cv.INTER_LINEAR)
+                    
+                    # 自帶 Alpha 去背：第四個通道是前景遮罩，前三個通道是 BGR
+                    fg_mask = summon_resized[:, :, 3]
+                    summon_bgr = summon_resized[:, :, :3]
+                    
+                    # 淡入比例 (1.0秒淡入)
+                    alpha_blend = min(1.0, t_rel / 1.0)
+                    
+                    # 決定要貼上特效的所有中心點 (固定在畫面中央)
+                    targets = [(w // 2, h // 2)]
+                    
+                    for cx, cy in targets:
+                        x1 = max(0, cx - ew // 2)
+                        y1 = max(0, cy - eh // 2)
+                        x2 = min(w, cx + ew // 2)
+                        y2 = min(h, cy + eh // 2)
+                        
+                        # 裁剪以防溢出邊界
+                        crop_x1 = ew // 2 - (cx - x1)
+                        crop_y1 = eh // 2 - (cy - y1)
+                        crop_x2 = ew // 2 + (x2 - cx)
+                        crop_y2 = eh // 2 + (y2 - cy)
+                        
+                        if (x2 > x1) and (y2 > y1):
+                            roi = debug_image[y1:y2, x1:x2]
+                            eff_cropped = summon_bgr[crop_y1:crop_y2, crop_x1:crop_x2]
+                            mask_cropped = fg_mask[crop_y1:crop_y2, crop_x1:crop_x2]
+                            
+                            # 結合淡入比例與去背 Mask
+                            mask_f = mask_cropped.astype(np.float32) / 255.0
+                            mask_f = np.expand_dims(mask_f * alpha_blend, axis=2)
+                            
+                            # 融合公式
+                            blended = eff_cropped.astype(np.float32) * mask_f + roi.astype(np.float32) * (1.0 - mask_f)
+                            debug_image[y1:y2, x1:x2] = blended.astype(np.uint8)
+            else:
+                is_playing_summon = False
+                summon_image = None
 
         # 渲染千鳥雷電特效 (lightning-aura.gif) - 跟隨所有手部位置並隨時間動態放大至 250% (使用 Alpha 通道精確去背)
         if is_playing_chidori and chidori_reader is not None:
