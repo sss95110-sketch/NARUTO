@@ -268,45 +268,7 @@ def main():
         frame_count += 1
         debug_image = copy.deepcopy(frame)
 
-        # 特效影片讀取與疊加邏輯 (在偵測前，使用上一影格的手部坐標，有 1 幀延遲但最平滑) #############
-        if is_playing_effect and effect_cap is not None:
-            ret_eff, eff_frame = effect_cap.read()
-            if ret_eff:
-                # 讓特效大一點：放大到 640x360
-                eff_h, eff_w = 360, 640
-                resized_eff = cv.resize(eff_frame, (eff_w, eff_h))
-                
-                # 獲取當前影像的實際寬高 (適應不同相機解析度，防止邊界被切掉)
-                img_h, img_w = debug_image.shape[:2]
-                
-                # 計算以手部中心為準的特效範圍
-                x_start = last_hand_cx - eff_w // 2
-                x_end = x_start + eff_w
-                y_start = last_hand_cy - eff_h // 2
-                y_end = y_start + eff_h
-                
-                # 邊界安全裁剪 (動態適應相機解析度，防止坐標越界崩潰)
-                x_start_clamped = max(0, x_start)
-                x_end_clamped = min(img_w, x_end)
-                y_start_clamped = max(0, y_start)
-                y_end_clamped = min(img_h, y_end)
-                
-                eff_x_start = x_start_clamped - x_start
-                eff_x_end = eff_x_start + (x_end_clamped - x_start_clamped)
-                eff_y_start = y_start_clamped - y_start
-                eff_y_end = eff_y_start + (y_end_clamped - y_start_clamped)
-                
-                # 確保裁剪後的寬高大於 0 才疊加
-                if (x_end_clamped > x_start_clamped) and (y_end_clamped > y_start_clamped):
-                    roi = debug_image[y_start_clamped:y_end_clamped, x_start_clamped:x_end_clamped]
-                    eff_patch = resized_eff[eff_y_start:eff_y_end, eff_x_start:eff_x_end]
-                    blended = cv.add(roi, eff_patch)
-                    debug_image[y_start_clamped:y_end_clamped, x_start_clamped:x_end_clamped] = blended
-            else:
-                # 影片播完，釋放資源
-                effect_cap.release()
-                effect_cap = None
-                is_playing_effect = False
+
 
         # FPS計測 ##############################################################
         fps_result = cvFpsCalc.get()
